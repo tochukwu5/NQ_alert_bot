@@ -1,0 +1,9 @@
+services:
+  - type: worker
+    name: nq-ict-bot
+    runtime: node
+    buildCommand: npm install
+    startCommand: node bot.js
+    envVars:
+      - key: NODE_ENV
+        value: production
