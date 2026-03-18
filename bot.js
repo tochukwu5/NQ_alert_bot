@@ -4,11 +4,13 @@
  * Strategy:    4H/Daily swing highs/lows sweep → 15min CISD + FVG confirmation
  * Alerts:      Telegram ONLY
  * Schedule:    Every 5 minutes, 1:00 AM – 11:00 AM EST only
+ * Hosting:     Render FREE Web Service (has a built-in HTTP server to stay alive)
  */
 
 require("dotenv").config();
 const cron         = require("node-cron");
 const axios        = require("axios");
+const http         = require("http");
 const { DateTime } = require("luxon");
 
 // ─── ENV VARIABLES ─────────────────────────────────────────────────────────────
@@ -19,26 +21,34 @@ const {
 } = process.env;
 
 // ─── BOT SETTINGS ──────────────────────────────────────────────────────────────
-const SYMBOL         = "NAS100";   // Twelve Data symbol for NQ / Nasdaq 100 CFD
-const EXCHANGE       = "CFD";      // CFD exchange on Twelve Data
+const SYMBOL         = "NAS100";
+const EXCHANGE       = "CFD";
 
-const SWEEP_THRESH   = 0.0005;     // 0.05% — how far beyond level = confirmed sweep
-const FVG_MIN_SIZE   = 5.0;        // Minimum FVG size in points
-const CISD_LOOKBACK  = 10;         // Number of 15min candles to check for CISD
-const ALERT_COOLDOWN = 2 * 60 * 60 * 1000; // 2 hours — prevents duplicate alerts
+const SWEEP_THRESH   = 0.0005;
+const FVG_MIN_SIZE   = 5.0;
+const CISD_LOOKBACK  = 10;
+const ALERT_COOLDOWN = 2 * 60 * 60 * 1000;
 
-// Trading window (EST)
-const SESSION_START  = 1;   // 1:00 AM EST
-const SESSION_END    = 11;  // 11:00 AM EST
+const SESSION_START  = 1;
+const SESSION_END    = 11;
 
-const lastAlertTimes = {};  // Track last alert per level to avoid spam
+const lastAlertTimes = {};
+
+// ─── KEEP-ALIVE HTTP SERVER ─────────────────────────────────────────────────────
+// Render's free tier requires a web server listening on a port.
+// This simple server responds to pings so Render keeps the app running.
+const PORT = process.env.PORT || 3000;
+
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("NQ ICT Bot is running ✅");
+});
+
+server.listen(PORT, () => {
+  console.log(`🌐  Web server listening on port ${PORT} (keeps Render alive)`);
+});
 
 // ─── TWELVE DATA — FETCH CANDLES ───────────────────────────────────────────────
-/**
- * Fetch OHLCV candles from Twelve Data
- * @param {string} interval   - e.g. "4h", "1day", "15min"
- * @param {number} outputsize - number of candles to fetch
- */
 async function getCandles(interval, outputsize = 100) {
   const url = "https://api.twelvedata.com/time_series";
   const params = {
@@ -46,13 +56,12 @@ async function getCandles(interval, outputsize = 100) {
     exchange:    EXCHANGE,
     interval,
     outputsize,
-    order:       "ASC",       // oldest → newest
+    order:       "ASC",
     apikey:      TWELVEDATA_API_KEY,
   };
 
   const { data } = await axios.get(url, { params, timeout: 15000 });
 
-  // Check for API errors
   if (data.status === "error") {
     throw new Error(`Twelve Data error: ${data.message}`);
   }
@@ -71,10 +80,6 @@ async function getCandles(interval, outputsize = 100) {
 }
 
 // ─── SWING LEVEL DETECTION ─────────────────────────────────────────────────────
-/**
- * Find the most recent swing high and swing low from candles
- * A swing high = higher than `lookback` candles on both sides
- */
 function getSwingLevels(candles, lookback = 5) {
   const swingHighs = [];
   const swingLows  = [];
@@ -96,17 +101,14 @@ function getSwingLevels(candles, lookback = 5) {
   }
 
   const levels = {};
-  if (swingHighs.length) levels.swing_high = swingHighs.at(-1); // most recent
+  if (swingHighs.length) levels.swing_high = swingHighs.at(-1);
   if (swingLows.length)  levels.swing_low  = swingLows.at(-1);
   return levels;
 }
 
-/**
- * Get the previous day's high and low as key levels
- */
 function getDailyExtremes(dailyCandles) {
   if (dailyCandles.length < 2) return {};
-  const prev = dailyCandles.at(-2); // second to last = previous completed day
+  const prev = dailyCandles.at(-2);
   return {
     daily_high: { time: prev.time, price: prev.high },
     daily_low:  { time: prev.time, price: prev.low  },
@@ -114,21 +116,12 @@ function getDailyExtremes(dailyCandles) {
 }
 
 // ─── SWEEP DETECTION ───────────────────────────────────────────────────────────
-/**
- * Returns true if price has swept beyond the level by SWEEP_THRESH
- * direction: "above" for highs, "below" for lows
- */
 function detectSweep(currentPrice, levelPrice, direction) {
   if (direction === "above") return currentPrice > levelPrice * (1 + SWEEP_THRESH);
   return currentPrice < levelPrice * (1 - SWEEP_THRESH);
 }
 
-// ─── FVG DETECTION (Fair Value Gap) ────────────────────────────────────────────
-/**
- * Bullish FVG: gap between candle[i-2].high and candle[i].low
- * Bearish FVG: gap between candle[i].high and candle[i-2].low
- * Returns last 5 FVGs found
- */
+// ─── FVG DETECTION ─────────────────────────────────────────────────────────────
 function detectFVG(candles) {
   const fvgs = [];
 
@@ -136,7 +129,6 @@ function detectFVG(candles) {
     const c0 = candles[i - 2];
     const c2 = candles[i];
 
-    // Bullish FVG — gap up
     if (c2.low > c0.high && (c2.low - c0.high) >= FVG_MIN_SIZE) {
       fvgs.push({
         type:   "bullish",
@@ -147,7 +139,6 @@ function detectFVG(candles) {
       });
     }
 
-    // Bearish FVG — gap down
     if (c0.low > c2.high && (c0.low - c2.high) >= FVG_MIN_SIZE) {
       fvgs.push({
         type:   "bearish",
@@ -159,26 +150,16 @@ function detectFVG(candles) {
     }
   }
 
-  return fvgs.slice(-5); // keep last 5 FVGs only
+  return fvgs.slice(-5);
 }
 
-/**
- * Check if current price is inside an FVG of the expected type
- */
 function priceInFVG(price, fvgs, type) {
   return [...fvgs].reverse().find(
     (f) => f.type === type && price >= f.bottom && price <= f.top
   ) || null;
 }
 
-// ─── CISD DETECTION (Change In State of Delivery) ─────────────────────────────
-/**
- * Bullish CISD: After a low sweep, look for a strong bullish candle
- *               that closes ABOVE the previous swing high (structure break)
- * Bearish CISD: After a high sweep, look for a strong bearish candle
- *               that closes BELOW the previous swing low (structure break)
- * "Strong" = body is > 60% of the full candle range (displacement)
- */
+// ─── CISD DETECTION ────────────────────────────────────────────────────────────
 function detectCISD(candles, bias) {
   const recent = candles.slice(-CISD_LOOKBACK);
   if (recent.length < 4) return false;
@@ -219,7 +200,6 @@ async function sendTelegram(message) {
   }
 }
 
-// ─── FIRE ALERT ────────────────────────────────────────────────────────────────
 async function fireAlert(title, details) {
   const nowUTC = DateTime.utc().toFormat("yyyy-MM-dd HH:mm");
 
@@ -239,7 +219,6 @@ async function scan() {
   const nowEST = DateTime.now().setZone("America/New_York");
   const hour   = nowEST.hour;
 
-  // ─ Time window check ─
   if (hour < SESSION_START || hour >= SESSION_END) {
     console.log(`⏸  [${nowEST.toFormat("HH:mm")} EST] Outside session (${SESSION_START}AM–${SESSION_END}AM) — sleeping`);
     return;
@@ -250,18 +229,15 @@ async function scan() {
   console.log(`${"─".repeat(55)}`);
 
   try {
-    // ─ Fetch all timeframes in parallel ─
     const [candles4H, candlesDaily, candles15] = await Promise.all([
-      getCandles("4h",   100),   // 4-hour candles — swing levels
-      getCandles("1day",  20),   // daily candles  — prev day high/low
-      getCandles("15min", 50),   // 15-min candles — CISD + FVG
+      getCandles("4h",   100),
+      getCandles("1day",  20),
+      getCandles("15min", 50),
     ]);
 
-    // ─ Current price ─
     const currentPrice = candles15.at(-1).close;
     console.log(`📊  NAS100 Price : ${currentPrice.toFixed(2)}`);
 
-    // ─ Build key levels ─
     const swingLevels = getSwingLevels(candles4H, 5);
     const dailyLevels = getDailyExtremes(candlesDaily);
     const allLevels   = { ...swingLevels, ...dailyLevels };
@@ -271,11 +247,9 @@ async function scan() {
       console.log(`    ${k.padEnd(12)} → ${v.price.toFixed(2)}`);
     }
 
-    // ─ Detect FVGs on 15min ─
     const fvgs = detectFVG(candles15);
     console.log(`📦  FVGs found   : ${fvgs.length}`);
 
-    // ─ Check each level for sweep + confirmation ─
     let setupFound = false;
 
     for (const [levelName, { price: levelPrice }] of Object.entries(allLevels)) {
@@ -302,7 +276,6 @@ async function scan() {
         continue;
       }
 
-      // ─ Cooldown: don't re-alert same level within 2 hours ─
       const key      = `${levelName}_${Math.round(levelPrice)}`;
       const lastTime = lastAlertTimes[key] || 0;
 
@@ -314,7 +287,6 @@ async function scan() {
 
       lastAlertTimes[key] = Date.now();
 
-      // ─ Build alert message ─
       const label   = levelName.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
       const title   = `${bias.toUpperCase()} REVERSAL — ${label} Swept`;
 
@@ -362,8 +334,6 @@ console.log("║       Scan: Every 5 minutes               ║");
 console.log("║       Window: 1:00 AM – 11:00 AM EST      ║");
 console.log("╚═══════════════════════════════════════════╝\n");
 
-// Run once immediately on start
 scan();
 
-// Then every 5 minutes
 cron.schedule("*/5 * * * *", scan);
