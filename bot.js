@@ -21,7 +21,7 @@ const {
 } = process.env;
 
 // ─── BOT SETTINGS ──────────────────────────────────────────────────────────────
-const SYMBOL         = "NAS100";
+const SYMBOL         = "eur/usd"; // Twelve Data uses lowercase symbols for forex CFDs
 const EXCHANGE       = "CFD";
 
 const SWEEP_THRESH   = 0.0005;
@@ -41,7 +41,7 @@ const PORT = process.env.PORT || 3000;
 
 const server = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("NQ ICT Bot is running ✅");
+  res.end("🚨EUR/USD ICT Bot is running ✅");
 });
 
 server.listen(PORT, () => {
@@ -204,7 +204,7 @@ async function fireAlert(title, details) {
   const nowUTC = DateTime.utc().toFormat("yyyy-MM-dd HH:mm");
 
   const tgMsg = [
-    `<b>🚨 NQ ICT SETUP DETECTED</b>`,
+    `<b>🚨EUR/USD ICT SETUP DETECTED</b>`,
     `<b>${title}</b>`,
     ``,
     `<pre>${details}</pre>`,
@@ -225,7 +225,7 @@ async function scan() {
   }
 
   console.log(`\n${"─".repeat(55)}`);
-  console.log(`🔍  NQ Scan @ ${nowEST.toFormat("HH:mm")} EST`);
+  console.log(`🔍  🚨EUR/USD Scan @ ${nowEST.toFormat("HH:mm")} EST`);
   console.log(`${"─".repeat(55)}`);
 
   try {
@@ -236,7 +236,7 @@ async function scan() {
     ]);
 
     const currentPrice = candles15.at(-1).close;
-    console.log(`📊  NAS100 Price : ${currentPrice.toFixed(2)}`);
+    console.log(`📊  eur/usd Price : ${currentPrice.toFixed(4)}`);
 
     const swingLevels = getSwingLevels(candles4H, 5);
     const dailyLevels = getDailyExtremes(candlesDaily);
@@ -244,7 +244,7 @@ async function scan() {
 
     console.log(`📍  Key Levels   :`);
     for (const [k, v] of Object.entries(allLevels)) {
-      console.log(`    ${k.padEnd(12)} → ${v.price.toFixed(2)}`);
+      console.log(`    ${k.padEnd(12)} → ${v.price.toFixed(4)}`);
     }
 
     const fvgs = detectFVG(candles15);
@@ -260,7 +260,7 @@ async function scan() {
       if (!swept) continue;
 
       setupFound = true;
-      console.log(`\n⚡  SWEEP: ${levelName} @ ${levelPrice.toFixed(2)}`);
+      console.log(`\n⚡  SWEEP: ${levelName} @ ${levelPrice.toFixed(4)}`);
 
       const bias     = isHigh ? "bearish" : "bullish";
       const fvgType  = isHigh ? "bearish" : "bullish";
@@ -291,13 +291,13 @@ async function scan() {
       const title   = `${bias.toUpperCase()} REVERSAL — ${label} Swept`;
 
       const fvgLine = fvgMatch
-        ? `FVG Range  : ${fvgMatch.bottom.toFixed(2)} – ${fvgMatch.top.toFixed(2)} (${fvgMatch.size.toFixed(1)} pts)`
+        ? `FVG Range  : ${fvgMatch.bottom.toFixed(4)} – ${fvgMatch.top.toFixed(4)} (${fvgMatch.size.toFixed(1)} pts)`
         : "";
 
       const details = [
-        `Instrument : NAS100 (NQ CFD)`,
-        `Level      : ${label} @ ${levelPrice.toFixed(2)}`,
-        `Price      : ${currentPrice.toFixed(2)}`,
+        `Instrument : eur/usd`,
+        `Level      : ${label} @ ${levelPrice.toFixed(4)}`,
+        `Price      : ${currentPrice.toFixed(4)}`,
         `Bias       : ${bias.toUpperCase()}`,
         ``,
         `CISD       : ${cisdOK   ? "✅ Confirmed"    : "❌ Not confirmed"}`,
@@ -327,7 +327,7 @@ async function scan() {
 
 // ─── STARTUP ───────────────────────────────────────────────────────────────────
 console.log("╔═══════════════════════════════════════════╗");
-console.log("║       🤖  NQ ICT TRADING BOT              ║");
+console.log("║       🤖  EUR/USD ICT TRADING BOT              ║");
 console.log("║       Data: Twelve Data (NAS100 CFD)      ║");
 console.log("║       Alerts: Telegram                    ║");
 console.log("║       Scan: Every 5 minutes               ║");
